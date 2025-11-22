@@ -1,42 +1,40 @@
 import { Router, Request, Response } from 'express';
-import axios from 'axios';
 import { env } from '../../../config/env';
+import { Gem } from '../../../infrastructure/gemini/Gem';
+import { MemoryCacheAdapter } from '../../../infrastructure/cache/MemoryCacheAdapter';
 
 export const registerStreamRoute = (router: Router) => {
-    const baseURL = `http://localhost:${env.PORT}`;
+    const gem = new Gem(env.GEMINI_API_KEY, new MemoryCacheAdapter());
 
     const streamHandler = async (res: Response) => {
         const prompt = 'Write a short story about coding, apples, & cats.';
         const modelName = 'gemini-2.5-flash-lite';
 
         try {
-            const response = await axios.post(
-                `${baseURL}/v1/textGeneration/streamGenerateContent/${modelName}`,
-                {
-                    contents: [{ parts: [{ text: prompt }] }]
-                },
-                {
-                    responseType: 'stream',
-                    decompress: false // 1. Prevent Axios buffering for decompression
-                }
-            );
-
-            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
 
-            // 2. Force headers to send immediately (bypassing some middleware)
             if (res.flushHeaders) res.flushHeaders();
 
-            // 3. Pipe the data
-            response.data.pipe(res);
-
-            // Optional: Handle stream close to prevent memory leaks
-            response.data.on('end', () => res.end());
-            res.on('close', () => {
-                // Destroy upstream stream if client disconnects
-                response.data.destroy();
+            const stream = gem.textGeneration.stream({
+                model: modelName,
+                contents: prompt,
             });
+
+            for await (const chunk of stream) {
+                res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                if ((res as any).flush) {
+                    (res as any).flush();
+                }
+            }
+
+            res.write('data: [DONE]\n\n');
+            if ((res as any).flush) {
+                (res as any).flush();
+            }
+
+            res.end();
 
         } catch (err) {
             // Handle axios connection errors before headers are sent

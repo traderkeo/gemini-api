@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CountTokensResponseSchema = exports.CountTokensRequestSchema = exports.GenerateContentResponseSchema = exports.GenerateContentRequestSchema = exports.ContentSchema = exports.PartSchema = exports.GenerationConfigSchema = exports.ResponseSchemaSchema = exports.SafetySettingSchema = void 0;
+exports.CountTokensResponseSchema = exports.CountTokensRequestSchema = exports.GenerateContentResponseSchema = exports.GenerateContentRequestSchema = exports.ContentSchema = exports.PartSchema = exports.ToolConfigSchema = exports.GenerationConfigSchema = exports.ResponseSchemaSchema = exports.SafetySettingSchema = void 0;
 const zod_1 = require("zod");
 // Safety Settings
 exports.SafetySettingSchema = zod_1.z.object({
@@ -35,6 +35,7 @@ exports.GenerationConfigSchema = zod_1.z.object({
     responseMimeType: zod_1.z.string().optional(),
     responseSchema: exports.ResponseSchemaSchema.optional(),
 });
+exports.ToolConfigSchema = zod_1.z.record(zod_1.z.any());
 // Content Parts
 exports.PartSchema = zod_1.z.union([
     zod_1.z.object({ text: zod_1.z.string() }),
@@ -59,8 +60,11 @@ exports.ContentSchema = zod_1.z.object({
 exports.GenerateContentRequestSchema = zod_1.z.object({
     contents: zod_1.z.array(exports.ContentSchema),
     tools: zod_1.z.any().optional(), // Simplified for now
+    toolConfig: exports.ToolConfigSchema.optional(),
     safetySettings: zod_1.z.array(exports.SafetySettingSchema).optional(),
+    systemInstruction: exports.ContentSchema.optional(),
     generationConfig: exports.GenerationConfigSchema.optional(),
+    cachedContent: zod_1.z.string().optional(),
 });
 // Response (Simplified)
 exports.GenerateContentResponseSchema = zod_1.z.object({

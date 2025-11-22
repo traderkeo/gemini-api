@@ -4,6 +4,7 @@ import { GemModels } from './features/models/GemModels';
 import { GemPredictions } from './features/predictions/GemPredictions';
 import { GemTextGeneration } from './features/textGeneration/GemTextGeneration';
 import { GEMINI_BASE_URL } from '../../config/constants';
+import { GoogleGenAI } from '@google/genai';
 
 export class Gem {
     public models: GemModels;
@@ -12,10 +13,11 @@ export class Gem {
 
     constructor(apiKey: string, cacheService: ICacheService) {
         const httpClient = new AxiosHttpClient(GEMINI_BASE_URL, apiKey);
+        const genAI = new GoogleGenAI({ apiKey });
 
         // Initialize features
         this.models = new GemModels(httpClient, cacheService);
         this.predictions = new GemPredictions(httpClient, cacheService);
-        this.textGeneration = new GemTextGeneration(httpClient, cacheService);
+        this.textGeneration = new GemTextGeneration(httpClient, cacheService, genAI);
     }
 }

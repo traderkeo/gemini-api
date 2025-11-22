@@ -5,6 +5,7 @@ import {
     CountTokensRequest,
     CountTokensResponse
 } from '../../domain/types/gemini-requests';
+import { StreamRequest } from '../../infrastructure/gemini/features/textGeneration/GemTextGeneration';
 
 export class TextGenerationService {
     constructor(private gem: Gem) { }
@@ -17,6 +18,15 @@ export class TextGenerationService {
         request: GenerateContentRequest
     ): AsyncGenerator<GenerateContentResponse, void, unknown> {
         return this.gem.textGeneration.streamGenerateContent(modelName, request);
+    }
+
+    /**
+     * Convenience wrapper that matches the new SDK-style stream signature.
+     */
+    public stream(
+        request: StreamRequest
+    ): AsyncGenerator<{ text: string }, void, unknown> {
+        return this.gem.textGeneration.stream(request);
     }
 
     /**
