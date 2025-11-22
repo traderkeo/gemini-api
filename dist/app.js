@@ -1,57 +1,110 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.App = void 0;
 const express_1 = __importDefault(require("express"));
-const crypto_1 = require("crypto");
-const helmet_1 = __importDefault(require("helmet"));
 const cors_1 = __importDefault(require("cors"));
+const helmet_1 = __importDefault(require("helmet"));
 const compression_1 = __importDefault(require("compression"));
 const morgan_1 = __importDefault(require("morgan"));
-const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
-const hpp_1 = __importDefault(require("hpp"));
-const config_1 = require("./config");
-const error_middleware_1 = __importDefault(require("./middleware/error.middleware"));
-const logger_1 = __importDefault(require("./utils/logger"));
-const app = (0, express_1.default)();
-// Trust Proxy (Required for rate limiting behind load balancers)
-app.set('trust proxy', 1);
-// Request ID Middleware
-app.use((req, res, next) => {
-    const requestId = req.headers['x-request-id'] || (0, crypto_1.randomUUID)();
-    req.headers['x-request-id'] = requestId;
-    res.setHeader('X-Request-Id', requestId);
-    next();
-});
-// Security Middleware
-app.use((0, helmet_1.default)()); // Set security HTTP headers
-app.use((0, cors_1.default)({ origin: config_1.config.corsOrigin, credentials: true })); // Enable CORS
-app.use((0, hpp_1.default)()); // Prevent HTTP Parameter Pollution
-// Rate Limiting
-const limiter = (0, express_rate_limit_1.default)({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again after 15 minutes',
-});
-app.use(limiter);
-// Standard Middleware
-app.use((0, compression_1.default)()); // Compress response bodies
-app.use(express_1.default.json({ limit: '10kb' })); // Parse JSON bodies (limit 10kb)
-app.use(express_1.default.urlencoded({ extended: true })); // Parse URL-encoded bodies
-app.use((0, morgan_1.default)('combined', { stream: { write: (message) => logger_1.default.info(message.trim()) } }));
-// Health Check Route
-app.get('/health', (_req, res) => {
-    res.status(200).json({
-        status: 'UP',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        pid: process.pid,
-        memory: process.memoryUsage(),
-    });
-});
-// Routes (Placeholder)
-// app.use('/api/v1', routes);
-// Error Handling
-app.use(error_middleware_1.default);
-exports.default = app;
+const env_1 = require("./config/env");
+const logger_1 = require("./config/logger");
+const ErrorHandler_1 = require("./presentation/middlewares/ErrorHandler");
+const RateLimiter_1 = require("./presentation/middlewares/RateLimiter");
+const MemoryCacheAdapter_1 = require("./infrastructure/cache/MemoryCacheAdapter");
+// import { RedisCacheAdapter } from './infrastructure/cache/RedisCacheAdapter';
+const Gem_1 = require("./infrastructure/gemini/Gem");
+const ModelService_1 = require("./application/services/ModelService");
+const PredictionService_1 = require("./application/services/PredictionService");
+const ModelsController_1 = require("./presentation/controllers/ModelsController");
+const PredictionsController_1 = require("./presentation/controllers/PredictionsController");
+const models_routes_1 = require("./presentation/routes/v1/models.routes");
+const predictions_routes_1 = require("./presentation/routes/v1/predictions.routes");
+const streamGenerateContent_routes_1 = require("./presentation/routes/v1/streamGenerateContent.routes");
+const countTokens_routes_1 = require("./presentation/routes/v1/countTokens.routes");
+const test_routes_1 = require("./presentation/routes/test/test.routes");
+const client = __importStar(require("prom-client"));
+class App {
+    constructor() {
+        this.app = (0, express_1.default)();
+        this.config();
+        // Dependency Injection Root
+        // Switch to MemoryCacheAdapter for local dev without Redis
+        const cacheService = new MemoryCacheAdapter_1.MemoryCacheAdapter();
+        // const cacheService = new RedisCacheAdapter(); // Uncomment for Production/Redis
+        this.gem = new Gem_1.Gem(env_1.env.GEMINI_API_KEY, cacheService);
+        const modelService = new ModelService_1.ModelService(this.gem);
+        const predictionService = new PredictionService_1.PredictionService(this.gem);
+        const modelsController = new ModelsController_1.ModelsController(modelService);
+        const predictionsController = new PredictionsController_1.PredictionsController(predictionService);
+        this.routes(modelsController, predictionsController);
+        this.metrics();
+    }
+    config() {
+        this.app.use((0, cors_1.default)());
+        this.app.use((0, helmet_1.default)({
+            contentSecurityPolicy: false,
+        }));
+        this.app.use((0, compression_1.default)());
+        this.app.use(express_1.default.json({ limit: '10mb' })); // Support large payloads
+        this.app.use((0, morgan_1.default)('combined', { stream: { write: (message) => logger_1.Logger.http(message.trim()) } }));
+        this.app.use(RateLimiter_1.apiLimiter);
+    }
+    routes(modelsController, predictionsController) {
+        this.app.use('/v1/models', (0, models_routes_1.createModelsRouter)(modelsController));
+        this.app.use('/v1', (0, predictions_routes_1.createPredictionsRouter)(predictionsController));
+        this.app.use('/v1/streamGenerateContent', (0, streamGenerateContent_routes_1.createStreamGenerateContentRouter)(predictionsController));
+        this.app.use('/v1/countTokens', (0, countTokens_routes_1.createCountTokensRouter)(predictionsController));
+        // Test routes for browser-based testing
+        this.app.use('/test', (0, test_routes_1.createTestRouter)());
+        // Health Check
+        this.app.get('/health', (_req, res) => { res.status(200).send('OK'); });
+        // Error Handler must be last
+        this.app.use(ErrorHandler_1.ErrorHandler);
+    }
+    metrics() {
+        const collectDefaultMetrics = client.collectDefaultMetrics;
+        collectDefaultMetrics();
+        this.app.get('/metrics', async (_req, res) => {
+            res.set('Content-Type', client.register.contentType);
+            res.end(await client.register.metrics());
+        });
+    }
+}
+exports.App = App;
+exports.default = new App().app;

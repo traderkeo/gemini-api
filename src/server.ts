@@ -1,45 +1,27 @@
 import app from './app';
-import { config } from './config';
-import logger from './utils/logger';
+import { env } from './config/env';
+import { Logger } from './config/logger';
+import cluster from 'cluster';
+import os from 'os';
 
-const port = config.port;
+const numCPUs = os.cpus().length;
 
-const server = app.listen(port, () => {
-    logger.info(`=================================`);
-    logger.info(`======= ENV: ${config.env} =======`);
-    logger.info(`🚀 App listening on the port ${port}`);
-    logger.info(`=================================`);
-});
+if (cluster.isPrimary && env.NODE_ENV === 'production') {
+    Logger.info(`Primary ${process.pid} is running`);
 
-// Performance: Keep-Alive Timeouts (Prevent 502s with Load Balancers)
-// Ensure Node's keep-alive is slightly longer than the LB's (e.g., AWS ALB is 60s)
-server.keepAliveTimeout = 65000; // 65 seconds
-server.headersTimeout = 66000; // 66 seconds
+    // Fork workers.
+    for (let i = 0; i < numCPUs; i++) {
+        cluster.fork();
+    }
 
-// Graceful Shutdown
-const shutdown = () => {
-    logger.info('SIGTERM signal received: closing HTTP server');
-    server.close(() => {
-        logger.info('HTTP server closed');
-        process.exit(0);
+    cluster.on('exit', (worker, _code, _signal) => {
+        Logger.warn(`worker ${worker.process.pid} died`);
+        // Replace the dead worker
+        cluster.fork();
     });
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err: Error) => {
-    logger.error('UNHANDLED REJECTION! 💥 Shutting down...');
-    logger.error(err.name, err.message);
-    server.close(() => {
-        process.exit(1);
+} else {
+    const port = env.PORT;
+    app.listen(port, () => {
+        Logger.info(`Server running on port ${port} - Environment: ${env.NODE_ENV} - Worker: ${process.pid}`);
     });
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err: Error) => {
-    logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
-    logger.error(err.name, err.message);
-    process.exit(1);
-});
+}

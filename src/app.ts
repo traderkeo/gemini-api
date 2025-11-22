@@ -1,62 +1,89 @@
-import express from 'express';
-import { randomUUID } from 'crypto';
-import helmet from 'helmet';
+import express, { Application } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
-import hpp from 'hpp';
-import { config } from './config';
-import errorMiddleware from './middleware/error.middleware';
-import logger from './utils/logger';
+import { env } from './config/env';
+import { Logger } from './config/logger';
+import { ErrorHandler } from './presentation/middlewares/ErrorHandler';
+import { apiLimiter } from './presentation/middlewares/RateLimiter';
+import { MemoryCacheAdapter } from './infrastructure/cache/MemoryCacheAdapter';
+// import { RedisCacheAdapter } from './infrastructure/cache/RedisCacheAdapter';
+import { Gem } from './infrastructure/gemini/Gem';
+import { ModelService } from './application/services/ModelService';
+import { PredictionService } from './application/services/PredictionService';
+import { TextGenerationService } from './application/services/TextGenerationService';
+import { ModelsController } from './presentation/controllers/ModelsController';
+import { PredictionsController } from './presentation/controllers/PredictionsController';
+import { TextGenerationController } from './presentation/controllers/TextGenerationController';
+import { createModelsRouter } from './presentation/routes/v1/models.routes';
+import { createPredictionsRouter } from './presentation/routes/v1/predictions.routes';
+import { createTextGenerationRouter } from './presentation/routes/v1/textGeneration.routes';
+import { createTestRouter } from './presentation/routes/test/test.routes';
+import * as client from 'prom-client';
 
-const app = express();
+export class App {
+    public app: Application;
+    private gem: Gem;
 
-// Trust Proxy (Required for rate limiting behind load balancers)
-app.set('trust proxy', 1);
+    constructor() {
+        this.app = express();
+        this.config();
 
-// Request ID Middleware
-app.use((req, res, next) => {
-    const requestId = req.headers['x-request-id'] as string || randomUUID();
-    req.headers['x-request-id'] = requestId;
-    res.setHeader('X-Request-Id', requestId);
-    next();
-});
+        // Dependency Injection Root
+        // Switch to MemoryCacheAdapter for local dev without Redis
+        const cacheService = new MemoryCacheAdapter();
+        // const cacheService = new RedisCacheAdapter(); // Uncomment for Production/Redis
 
-// Security Middleware
-app.use(helmet()); // Set security HTTP headers
-app.use(cors({ origin: config.corsOrigin, credentials: true })); // Enable CORS
-app.use(hpp()); // Prevent HTTP Parameter Pollution
+        this.gem = new Gem(env.GEMINI_API_KEY, cacheService);
 
-// Rate Limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again after 15 minutes',
-});
-app.use(limiter);
+        const modelService = new ModelService(this.gem);
+        const predictionService = new PredictionService(this.gem);
+        const textGenerationService = new TextGenerationService(this.gem);
 
-// Standard Middleware
-app.use(compression()); // Compress response bodies
-app.use(express.json({ limit: '10kb' })); // Parse JSON bodies (limit 10kb)
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
-app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
+        const modelsController = new ModelsController(modelService);
+        const predictionsController = new PredictionsController(predictionService);
+        const textGenerationController = new TextGenerationController(textGenerationService);
 
-// Health Check Route
-app.get('/health', (_req, res) => {
-    res.status(200).json({
-        status: 'UP',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        pid: process.pid,
-        memory: process.memoryUsage(),
-    });
-});
+        this.routes(modelsController, predictionsController, textGenerationController);
+        this.metrics();
+    }
 
-// Routes (Placeholder)
-// app.use('/api/v1', routes);
+    private config(): void {
+        this.app.use(cors());
+        this.app.use(helmet({
+            contentSecurityPolicy: false,
+        }));
+        this.app.use(compression());
+        this.app.use(express.json({ limit: '10mb' })); // Support large payloads
+        this.app.use(morgan('combined', { stream: { write: (message) => Logger.http(message.trim()) } }));
+        this.app.use(apiLimiter);
+    }
 
-// Error Handling
-app.use(errorMiddleware);
+    private routes(modelsController: ModelsController, predictionsController: PredictionsController, textGenerationController: TextGenerationController): void {
+        this.app.use('/v1/models', createModelsRouter(modelsController));
+        this.app.use('/v1', createPredictionsRouter(predictionsController));
+        this.app.use('/v1/textGeneration', createTextGenerationRouter(textGenerationController));
 
-export default app;
+        // Test routes for browser-based testing
+        this.app.use('/test', createTestRouter());
+
+        // Health Check
+        this.app.get('/health', (_req, res) => { res.status(200).send('OK'); });
+
+        // Error Handler must be last
+        this.app.use(ErrorHandler);
+    }
+
+    private metrics(): void {
+        const collectDefaultMetrics = client.collectDefaultMetrics;
+        collectDefaultMetrics();
+
+        this.app.get('/metrics', async (_req, res) => {
+            res.set('Content-Type', client.register.contentType);
+            res.end(await client.register.metrics());
+        });
+    }
+}
+
+export default new App().app;
